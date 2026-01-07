@@ -6,14 +6,22 @@ function decodeUplink(input) {
   if (temp1_raw > 32767) {
     temp1_raw = temp1_raw - 65536;
   }
-  data.temp1 = temp1_raw / 100.0;
+  if (temp1_raw == -999900) {
+    data.temp1 = "error";
+  } else {
+    data.temp1 = temp1_raw / 100.0;
+  }
 
   // Temperature 2
   var temp2_raw = (input.bytes[2] << 8) | input.bytes[3];
   if (temp2_raw > 32767) {
     temp2_raw = temp2_raw - 65536;
   }
-  data.temp2 = temp2_raw / 100.0;
+  if (temp2_raw == -999900) {
+    data.temp2 = "error";
+  } else {
+    data.temp2 = temp2_raw / 100.0;
+  }
 
   // Voltage
   data.voltage = ((input.bytes[4] << 8) | input.bytes[5]) / 100.0;

@@ -1,7 +1,7 @@
 #include <RadioLib.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <axp20x.h>
+#include <XPowersLib.h>
 
 // LoRaWAN Credentials
 uint64_t joinEUI = 0x8c2499fd20365455;
@@ -22,17 +22,21 @@ SX1276 radio = new Module(18, 26, 23, 33);
 LoRaWANNode node(&radio, &EU868);
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-AXP20X_Class pmu;
+XPowersAXP2101 pmu;
 
 void setup() {
   Serial.begin(115200);
 
   // Initialize PMU
   Wire.begin(21, 22);
-  if (!pmu.begin(Wire, AXP192_SLAVE_ADDRESS)) {
+  if (!pmu.init()) {
     Serial.println("Failed to initialize PMU!");
     while (true);
   }
+  pmu.setALDO2Voltage(3300); // LoRa VDD
+  pmu.enableALDO2();
+  pmu.setALDO3Voltage(3300); // GPS VDD
+  pmu.enableALDO3();
 
   // Initialize sensors
   sensors.begin();
@@ -63,8 +67,14 @@ void loop() {
   // Request temperatures
   sensors.requestTemperatures();
   float temp1 = sensors.getTempCByIndex(0);
+  if (temp1 == -127.00) {
+    temp1 = -9999;
+  }
   float temp2 = sensors.getTempCByIndex(1);
-  float batteryVoltage = pmu.getBattVoltage() / 1000.0f;
+  if (temp2 == -127.00) {
+    temp2 = -9999;
+  }
+  float batteryVoltage = pmu.getBattVoltage();
 
   // Print sensor readings
   Serial.print("Temperature 1: ");
