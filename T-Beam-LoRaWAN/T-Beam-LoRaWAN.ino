@@ -60,6 +60,9 @@ void setup() {
   pmu.setALDO3Voltage(3300);
   pmu.enableALDO3();
 
+  // Enable Battery ADC
+  pmu.enableBattVoltageMeasure();
+
   // Initialize sensors
   sensors.begin();
 
