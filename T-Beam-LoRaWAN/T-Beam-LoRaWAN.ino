@@ -89,7 +89,6 @@ void loop() {
   if (temp2 == -127.00) {
     temp2 = -9999;
   }
-  float batteryVoltage = pmu.getBattVoltage();
 
   // Print sensor readings
   Serial.print("Temperature 1: ");
@@ -98,22 +97,16 @@ void loop() {
   Serial.print("Temperature 2: ");
   Serial.print(temp2);
   Serial.println(" *C");
-  Serial.print("Battery Voltage: ");
-  Serial.print(batteryVoltage);
-  Serial.println(" V");
 
   // Prepare payload
-  byte payload[6];
+  byte payload[4];
   int16_t temp1_int = temp1 * 100;
   int16_t temp2_int = temp2 * 100;
-  uint16_t voltage_int = batteryVoltage * 100;
 
   payload[0] = (temp1_int >> 8) & 0xFF;
   payload[1] = temp1_int & 0xFF;
   payload[2] = (temp2_int >> 8) & 0xFF;
   payload[3] = temp2_int & 0xFF;
-  payload[4] = (voltage_int >> 8) & 0xFF;
-  payload[5] = voltage_int & 0xFF;
 
   // Send LoRaWAN packet
   Serial.print(F("[LoRaWAN] Sending packet ... "));
