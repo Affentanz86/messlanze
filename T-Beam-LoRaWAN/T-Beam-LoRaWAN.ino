@@ -33,10 +33,10 @@ void setup() {
     Serial.println("Failed to initialize PMU!");
     while (true);
   }
-  pmu.setALDO2Voltage(3300); // LoRa VDD
   pmu.enableALDO2();
-  pmu.setALDO3Voltage(3300); // GPS VDD
   pmu.enableALDO3();
+  pmu.enableDC1();
+
 
   // Initialize sensors
   sensors.begin();
