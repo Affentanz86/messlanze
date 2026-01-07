@@ -33,25 +33,32 @@ void setup() {
     Serial.println("Failed to initialize PMU!");
     while (true);
   }
-  // Set voltages for LoRa and GPS
-  pmu.setALDO2Voltage(3300);
-  pmu.setALDO3Voltage(3300);
+  Serial.println("AXP2101 Power management initialization success");
 
-  // Enable all power rails
+  // Disable unused power rails to save power and avoid conflicts
+  pmu.disableDC2();
+  pmu.disableDC3();
+  pmu.disableDC4();
+  pmu.disableDC5();
+  pmu.disableALDO1();
+  pmu.disableALDO4();
+  pmu.disableBLDO1();
+  pmu.disableBLDO2();
+  pmu.disableDLDO1();
+  pmu.disableDLDO2();
+
+  // Set voltage and enable required power rails
+  // DCDC1 is for the ESP32
+  pmu.setDC1Voltage(3300);
   pmu.enableDC1();
-  pmu.enableDC2();
-  pmu.enableDC3();
-  pmu.enableDC4();
-  pmu.enableDC5();
-  pmu.enableALDO1();
-  pmu.enableALDO2();
-  pmu.enableALDO3();
-  pmu.enableALDO4();
-  pmu.enableBLDO1();
-  pmu.enableBLDO2();
-  pmu.enableDLDO1();
-  pmu.enableDLDO2();
 
+  // ALDO2 is for the LoRa chip
+  pmu.setALDO2Voltage(3300);
+  pmu.enableALDO2();
+
+  // ALDO3 is for the GPS
+  pmu.setALDO3Voltage(3300);
+  pmu.enableALDO3();
 
   // Initialize sensors
   sensors.begin();
@@ -98,15 +105,24 @@ void loop() {
   Serial.print(temp2);
   Serial.println(" *C");
 
+  // Get battery voltage
+  float battVoltage = pmu.getBattVoltage() / 1000.0;
+  Serial.print("Battery Voltage: ");
+  Serial.print(battVoltage);
+  Serial.println(" V");
+
   // Prepare payload
-  byte payload[4];
+  byte payload[6];
   int16_t temp1_int = temp1 * 100;
   int16_t temp2_int = temp2 * 100;
+  uint16_t batt_mv = battVoltage * 1000;
 
   payload[0] = (temp1_int >> 8) & 0xFF;
   payload[1] = temp1_int & 0xFF;
   payload[2] = (temp2_int >> 8) & 0xFF;
   payload[3] = temp2_int & 0xFF;
+  payload[4] = (batt_mv >> 8) & 0xFF;
+  payload[5] = batt_mv & 0xFF;
 
   // Send LoRaWAN packet
   Serial.print(F("[LoRaWAN] Sending packet ... "));
