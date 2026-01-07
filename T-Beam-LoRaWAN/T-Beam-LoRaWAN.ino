@@ -18,7 +18,7 @@ uint8_t nwkKey[] = {0x30, 0x27, 0x29, 0xeb, 0xdc, 0x97, 0xe5, 0xd5, 0xe4, 0xc0, 
 
 // Module instances
 // IMPORTANT: Make sure the pin numbers match your specific board version.
-SX1276 radio = new Module(18, 26, 14, 33);
+SX1276 radio = new Module(18, 26, 23, 33);
 LoRaWANNode node(&radio, &EU868);
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
