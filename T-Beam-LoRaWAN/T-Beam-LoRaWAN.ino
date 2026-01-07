@@ -33,7 +33,9 @@ void setup() {
     Serial.println("Failed to initialize PMU!");
     while (true);
   }
+  pmu.setALDO2Voltage(3300);
   pmu.enableALDO2();
+  pmu.setALDO3Voltage(3300);
   pmu.enableALDO3();
   pmu.enableDC1();
 
