@@ -138,6 +138,14 @@ void do_send(osjob_t* j) {
     payload[4] = vbs;
     payload[5] = vbs >> 8;
 
+    Serial.print("Sending Data -> Temp1: ");
+    Serial.print(t1);
+    Serial.print(" *C, Temp2: ");
+    Serial.print(t2);
+    Serial.print(" *C, VBat: ");
+    Serial.print(vb);
+    Serial.println(" V");
+
     LMIC_setTxData2(1, payload, sizeof(payload), 0);
     Serial.println(F("Uplink queued"));
 }
