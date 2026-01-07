@@ -38,6 +38,7 @@ void setup() {
   sensors.begin();
 
   // Initialize LoRa radio
+  SPI.begin(5, 19, 27, 18);
   Serial.print(F("[SX1276] Initializing ... "));
   int state = radio.begin();
   if (state != RADIOLIB_ERR_NONE) {
