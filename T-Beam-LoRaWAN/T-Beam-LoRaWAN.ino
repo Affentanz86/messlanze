@@ -5,6 +5,7 @@
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
+#include "esp_mac.h"
 #include <Wire.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -26,17 +27,62 @@ const lmic_pinmap lmic_pins = {
 // ─────────────────────────────────────────────
 // LoRaWAN OTAA KEYS
 
-// DevEUI: 98fb9a48cf113f1a (little-endian!)
-static const u1_t PROGMEM DEVEUI[8] = { 0x1A, 0x3F, 0x11, 0xCF, 0x48, 0x9A, 0xFB, 0x98 };
-void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8); }
-
-// JoinEUI: 8c2499fd20365455 (little-endian!)
+// WICHTIG: JoinEUI / AppEUI im Little-Endian Format (LSB first)
+// Chirpstack: 8c2499fd20365455
 static const u1_t PROGMEM APPEUI[8] = { 0x55, 0x54, 0x36, 0x20, 0xFD, 0x99, 0x24, 0x8C };
 void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8); }
 
-// AppKey: 302729ebdc97e5d5e4c05c9c36a5f245 (big-endian)
+// WICHTIG: AppKey im Big-Endian Format (MSB first)
+// Chirpstack: 302729ebdc97e5d5e4c05c9c36a5f245
 static const u1_t PROGMEM APPKEY[16] = { 0x30, 0x27, 0x29, 0xEB, 0xDC, 0x97, 0xE5, 0xD5, 0xE4, 0xC0, 0x5C, 0x9C, 0x36, 0xA5, 0xF2, 0x45 };
 void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16); }
+
+// DevEUI wird automatisch aus der ESP32 MAC-Adresse generiert.
+// Dadurch ist jedes Gerät eindeutig. Die EUI muss nach dem Flashen
+// aus dem seriellen Monitor ausgelesen und in Chirpstack eingetragen werden.
+void os_getDevEui (u1_t* buf) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    // EUI64-Format: [MAC_1-3, 0xFF, 0xFE, MAC_4-6]
+    // LMIC braucht es aber in Little-Endian (LSB first), also umgedreht.
+    buf[0] = mac[5];
+    buf[1] = mac[4];
+    buf[2] = mac[3];
+    buf[3] = 0xFE;
+    buf[4] = 0xFF;
+    buf[5] = mac[2];
+    buf[6] = mac[1];
+    buf[7] = mac[0];
+}
+
+// Hilfsfunktion zum Ausgeben der Schlüssel auf dem seriellen Monitor
+void printKeys() {
+    u1_t buf[16];
+
+    u1_t devEui[8];
+    os_getDevEui(devEui);
+
+    Serial.print("DevEUI (MSB):   ");
+    for (int i = 7; i >= 0; i--) { // Rückwärts ausgeben für MSB-Format
+        Serial.printf("%02X", devEui[i]);
+    }
+    Serial.println();
+
+    os_getArtEui(buf);
+    Serial.print("JoinEUI (MSB):  ");
+    for (int i = 7; i >= 0; i--) { // Rückwärts ausgeben für MSB-Format
+        Serial.printf("%02X", buf[i]);
+    }
+    Serial.println();
+
+    os_getDevKey(buf);
+    Serial.print("AppKey (MSB):   ");
+    for (int i = 0; i < 16; i++) { // Ist bereits MSB
+        Serial.printf("%02X", buf[i]);
+    }
+    Serial.println();
+}
 
 // ─────────────────────────────────────────────
 #define ONE_WIRE_BUS 13
@@ -184,6 +230,9 @@ void setup() {
     Serial.begin(115200);
     delay(2000);
     Serial.println(F("Starting T-Beam OTAA (Dragino D22-LB Payload)"));
+    Serial.println(F("--------------------------------------------------"));
+    printKeys();
+    Serial.println(F("--------------------------------------------------"));
 
     // SPI FIX (extrem wichtig)
     SPI.begin(5, 19, 27, 18); // SCK, MISO, MOSI, NSS

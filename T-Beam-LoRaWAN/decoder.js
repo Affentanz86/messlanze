@@ -1,14 +1,14 @@
 // Chirpstack v4 JavaScript Codec für Dragino D22-LB Payload-Format
 // --------------------------------------------------------------------
-// Docs: https://www.chirpstack.io/docs/chirpstack/use/device-profiles/codec.html
-// Dragino D22-LB Manual: http://wiki.dragino.com/xwiki/bin/view/Main/User%20Manual%20for%20LoRaWAN%20End%20Nodes/D20-LBD22-LBD23-LB_LoRaWAN_Temperature_Sensor_User_Manual/
+// Angepasst für das T-Beam Projekt.
+// Feldnamen wurden an die Standard-Darstellung in Chirpstack für Dragino-Sensoren angeglichen.
 //
 // Payload-Struktur (11 Bytes, Big-Endian, FPort=2):
 // [0-1]: Batteriespannung (unsigned int16, in Millivolt)
-// [2-3]: Temperatur Sonde 1 (signed int16, Wert * 10)
+// [2-3]: Temperatur Sonde 1 (DS18B20_1, signed int16, Wert * 10)
 // [4-5]: Ignoriert
 // [6]:   Alarm-Flag
-// [7-8]: Temperatur Sonde 2 (signed int16, Wert * 10)
+// [7-8]: Temperatur Sonde 2 (DS18B20_2, signed int16, Wert * 10)
 // [9-10]: Platzhalter für Sonde 3 (0x7FFF)
 // --------------------------------------------------------------------
 
@@ -38,21 +38,21 @@ function decodeUplink(input) {
 
   var decoded = {};
 
-  // Bytes 0-1: Batteriespannung (unsigned int16)
+  // Bytes 0-1: Batteriespannung (BatV, unsigned int16)
   // Der Wert wird in mV gesendet, wir konvertieren ihn in V.
-  decoded.battery_voltage = view.getUint16(0) / 1000.0;
+  decoded.BatV = view.getUint16(0) / 1000.0;
 
-  // Bytes 2-3: Temperatur Sonde 1 (signed int16)
+  // Bytes 2-3: Temperatur Sonde 1 (DS18B20_1, signed int16)
   // Der Wert wird als Grad * 10 gesendet, wir teilen, um den echten Wert zu erhalten.
-  decoded.temperature_probe_1 = view.getInt16(2) / 10.0;
+  decoded.DS18B20_1 = view.getInt16(2) / 10.0;
 
-  // Bytes 7-8: Temperatur Sonde 2 (signed int16)
-  decoded.temperature_probe_2 = view.getInt16(7) / 10.0;
+  // Bytes 7-8: Temperatur Sonde 2 (DS18B20_2, signed int16)
+  decoded.DS18B20_2 = view.getInt16(7) / 10.0;
 
-  // Byte 6: Alarm-Flag
+  // Byte 6: Alarm-Flag (Ext_Trigger)
   // Wir extrahieren das unterste Bit, um den Alarmstatus zu bestimmen.
   var alarm_byte = view.getUint8(6);
-  decoded.alarm_status = (alarm_byte & 0x01) ? "ALARM" : "OK";
+  decoded.Ext_Trigger = (alarm_byte & 0x01) ? true : false;
 
   return {
     data: decoded
