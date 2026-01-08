@@ -84,6 +84,7 @@ float getBatteryVoltage() {
     if (!pmu.isBatteryConnect()) {
         return 0.0;
     }
+    // The PMU returns the value in mV, so we convert to V.
     return pmu.getBattVoltage() / 1000.0;
 }
 
@@ -117,37 +118,64 @@ void onEvent (ev_t ev) {
 }
 
 // ─────────────────────────────────────────────
-// Uplink
+// Uplink - Dragino D22-LB Payload Format
 void do_send(osjob_t* j) {
     if (LMIC.opmode & OP_TXRXPEND) return;
 
+    // Read sensor values
     sensors.requestTemperatures();
-    float t1 = sensors.getTempCByIndex(0);
-    float t2 = sensors.getTempCByIndex(1);
-    float vb = getBatteryVoltage();
+    float temp1_float = sensors.getTempCByIndex(0);
+    float temp2_float = sensors.getTempCByIndex(1);
+    float voltage_float = getBatteryVoltage();
 
-    uint8_t payload[6];
-    int16_t t1s = (int16_t)(t1 * 100);
-    int16_t t2s = (int16_t)(t2 * 100);
-    uint16_t vbs = (uint16_t)(vb * 100);
+    // --- Start Payload Assembly ---
+    uint8_t payload[11];
 
-    payload[0] = t1s;
-    payload[1] = t1s >> 8;
-    payload[2] = t2s;
-    payload[3] = t2s >> 8;
-    payload[4] = vbs;
-    payload[5] = vbs >> 8;
+    // Bytes 0-1: Battery Voltage (mV, unsigned, Big-Endian)
+    uint16_t voltage_mv = (uint16_t)(voltage_float * 1000);
+    payload[0] = voltage_mv >> 8;
+    payload[1] = voltage_mv & 0xFF;
 
+    // Bytes 2-3: Temperature 1 (degrees * 10, signed, Big-Endian)
+    int16_t temp1_scaled = (int16_t)(temp1_float * 10);
+    payload[2] = temp1_scaled >> 8;
+    payload[3] = temp1_scaled & 0xFF;
+
+    // Bytes 4-5: Ignored (as per Dragino spec)
+    payload[4] = 0x00;
+    payload[5] = 0x00;
+
+    // Byte 6: Alarm Flag (0x00 for normal uplink)
+    payload[6] = 0x00;
+
+    // Bytes 7-8: Temperature 2 (degrees * 10, signed, Big-Endian)
+    int16_t temp2_scaled = (int16_t)(temp2_float * 10);
+    payload[7] = temp2_scaled >> 8;
+    payload[8] = temp2_scaled & 0xFF;
+
+    // Bytes 9-10: Placeholder for 3rd sensor (0x7FFF means not present)
+    payload[9]  = 0x7F;
+    payload[10] = 0xFF;
+    // --- End Payload Assembly ---
+
+    // Print values to serial monitor for debugging
     Serial.print("Sending Data -> Temp1: ");
-    Serial.print(t1);
-    Serial.print(" *C, Temp2: ");
-    Serial.print(t2);
-    Serial.print(" *C, VBat: ");
-    Serial.print(vb);
-    Serial.println(" V");
+    Serial.print(temp1_float);
+    Serial.print(" *C (Raw: ");
+    Serial.print(temp1_scaled);
+    Serial.print("), Temp2: ");
+    Serial.print(temp2_float);
+    Serial.print(" *C (Raw: ");
+    Serial.print(temp2_scaled);
+    Serial.print("), VBat: ");
+    Serial.print(voltage_float);
+    Serial.print(" V (Raw: ");
+    Serial.print(voltage_mv);
+    Serial.println(" mV)");
 
-    LMIC_setTxData2(1, payload, sizeof(payload), 0);
-    Serial.println(F("Uplink queued"));
+    // Schedule the transmission on FPort 2
+    LMIC_setTxData2(2, payload, sizeof(payload), 0);
+    Serial.println(F("Uplink queued on FPort 2"));
 }
 
 // ─────────────────────────────────────────────
@@ -155,7 +183,7 @@ void do_send(osjob_t* j) {
 void setup() {
     Serial.begin(115200);
     delay(2000);
-    Serial.println(F("Starting T-Beam OTAA"));
+    Serial.println(F("Starting T-Beam OTAA (Dragino D22-LB Payload)"));
 
     // SPI FIX (extrem wichtig)
     SPI.begin(5, 19, 27, 18); // SCK, MISO, MOSI, NSS

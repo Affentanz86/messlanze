@@ -1,23 +1,35 @@
-// Chirpstack v4 JavaScript Codec
-// ----------------------------------
+// Chirpstack v4 JavaScript Codec für Dragino D22-LB Payload-Format
+// --------------------------------------------------------------------
 // Docs: https://www.chirpstack.io/docs/chirpstack/use/device-profiles/codec.html
+// Dragino D22-LB Manual: http://wiki.dragino.com/xwiki/bin/view/Main/User%20Manual%20for%20LoRaWAN%20End%20Nodes/D20-LBD22-LBD23-LB_LoRaWAN_Temperature_Sensor_User_Manual/
 //
-// Payload-Struktur (6 Bytes, Little-Endian):
-// [0-1]: Temperatur 1 (signed int16, Wert * 100)
-// [2-3]: Temperatur 2 (signed int16, Wert * 100)
-// [4-5]: Batteriespannung (unsigned int16, Wert * 100)
-// ----------------------------------
+// Payload-Struktur (11 Bytes, Big-Endian, FPort=2):
+// [0-1]: Batteriespannung (unsigned int16, in Millivolt)
+// [2-3]: Temperatur Sonde 1 (signed int16, Wert * 10)
+// [4-5]: Ignoriert
+// [6]:   Alarm-Flag
+// [7-8]: Temperatur Sonde 2 (signed int16, Wert * 10)
+// [9-10]: Platzhalter für Sonde 3 (0x7FFF)
+// --------------------------------------------------------------------
 
 function decodeUplink(input) {
   // Überprüfen, ob die erwartete Anzahl von Bytes empfangen wurde.
-  if (input.bytes.length !== 6) {
+  if (input.bytes.length !== 11) {
     return {
-      errors: ["Erwartet wurden 6 Bytes, empfangen wurden " + input.bytes.length]
+      errors: ["Erwartet wurden 11 Bytes, empfangen wurden " + input.bytes.length]
     };
   }
 
-  // Erstellen eines ArrayBuffer und DataView aus dem Byte-Array
-  // DataView ermöglicht das Lesen von Multi-Byte-Zahlen aus dem Puffer.
+  // Überprüfen, ob der FPort korrekt ist.
+  if (input.fPort !== 2) {
+      return {
+          warnings: ["Uplink auf falschem FPort empfangen, erwartet 2, war " + input.fPort]
+      };
+  }
+
+  // Erstellen eines ArrayBuffer und DataView aus dem Byte-Array.
+  // DataView ist der robusteste Weg, Multi-Byte-Werte zu lesen.
+  // Der Standard ist Big-Endian, was dem Dragino-Format entspricht.
   var buffer = new ArrayBuffer(input.bytes.length);
   var view = new DataView(buffer);
   input.bytes.forEach(function (b, i) {
@@ -26,15 +38,21 @@ function decodeUplink(input) {
 
   var decoded = {};
 
-  // Temperatur 1: Bytes 0-1, vorzeichenbehaftete 16-Bit-Ganzzahl, Little-Endian
-  // Der 'true'-Parameter gibt Little-Endian an.
-  decoded.temperature_1 = view.getInt16(0, true) / 100.0;
+  // Bytes 0-1: Batteriespannung (unsigned int16)
+  // Der Wert wird in mV gesendet, wir konvertieren ihn in V.
+  decoded.battery_voltage = view.getUint16(0) / 1000.0;
 
-  // Temperatur 2: Bytes 2-3, vorzeichenbehaftete 16-Bit-Ganzzahl, Little-Endian
-  decoded.temperature_2 = view.getInt16(2, true) / 100.0;
+  // Bytes 2-3: Temperatur Sonde 1 (signed int16)
+  // Der Wert wird als Grad * 10 gesendet, wir teilen, um den echten Wert zu erhalten.
+  decoded.temperature_probe_1 = view.getInt16(2) / 10.0;
 
-  // Batteriespannung: Bytes 4-5, vorzeichenlose 16-Bit-Ganzzahl, Little-Endian
-  decoded.battery_voltage = view.getUint16(4, true) / 100.0;
+  // Bytes 7-8: Temperatur Sonde 2 (signed int16)
+  decoded.temperature_probe_2 = view.getInt16(7) / 10.0;
+
+  // Byte 6: Alarm-Flag
+  // Wir extrahieren das unterste Bit, um den Alarmstatus zu bestimmen.
+  var alarm_byte = view.getUint8(6);
+  decoded.alarm_status = (alarm_byte & 0x01) ? "ALARM" : "OK";
 
   return {
     data: decoded
