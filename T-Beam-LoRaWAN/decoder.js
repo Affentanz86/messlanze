@@ -1,31 +1,42 @@
+// Chirpstack v4 JavaScript Codec
+// ----------------------------------
+// Docs: https://www.chirpstack.io/docs/chirpstack/use/device-profiles/codec.html
+//
+// Payload-Struktur (6 Bytes, Little-Endian):
+// [0-1]: Temperatur 1 (signed int16, Wert * 100)
+// [2-3]: Temperatur 2 (signed int16, Wert * 100)
+// [4-5]: Batteriespannung (unsigned int16, Wert * 100)
+// ----------------------------------
+
 function decodeUplink(input) {
-  var data = {};
-
-  // Temperature 1
-  var temp1_raw = (input.bytes[0] << 8) | input.bytes[1];
-  if (temp1_raw > 32767) {
-    temp1_raw = temp1_raw - 65536;
-  }
-  if (temp1_raw == -999900) {
-    data.temp1 = "error";
-  } else {
-    data.temp1 = temp1_raw / 100.0;
+  // Überprüfen, ob die erwartete Anzahl von Bytes empfangen wurde.
+  if (input.bytes.length !== 6) {
+    return {
+      errors: ["Erwartet wurden 6 Bytes, empfangen wurden " + input.bytes.length]
+    };
   }
 
-  // Temperature 2
-  var temp2_raw = (input.bytes[2] << 8) | input.bytes[3];
-  if (temp2_raw > 32767) {
-    temp2_raw = temp2_raw - 65536;
-  }
-  if (temp2_raw == -999900) {
-    data.temp2 = "error";
-  } else {
-    data.temp2 = temp2_raw / 100.0;
-  }
+  // Erstellen eines ArrayBuffer und DataView aus dem Byte-Array
+  // DataView ermöglicht das Lesen von Multi-Byte-Zahlen aus dem Puffer.
+  var buffer = new ArrayBuffer(input.bytes.length);
+  var view = new DataView(buffer);
+  input.bytes.forEach(function (b, i) {
+    view.setUint8(i, b);
+  });
+
+  var decoded = {};
+
+  // Temperatur 1: Bytes 0-1, vorzeichenbehaftete 16-Bit-Ganzzahl, Little-Endian
+  // Der 'true'-Parameter gibt Little-Endian an.
+  decoded.temperature_1 = view.getInt16(0, true) / 100.0;
+
+  // Temperatur 2: Bytes 2-3, vorzeichenbehaftete 16-Bit-Ganzzahl, Little-Endian
+  decoded.temperature_2 = view.getInt16(2, true) / 100.0;
+
+  // Batteriespannung: Bytes 4-5, vorzeichenlose 16-Bit-Ganzzahl, Little-Endian
+  decoded.battery_voltage = view.getUint16(4, true) / 100.0;
 
   return {
-    data: data,
-    warnings: [],
-    errors: []
+    data: decoded
   };
 }
