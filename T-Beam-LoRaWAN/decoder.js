@@ -1,60 +1,80 @@
-// Chirpstack v4 JavaScript Codec für Dragino D22-LB Payload-Format
-// --------------------------------------------------------------------
-// Angepasst für das T-Beam Projekt.
-// Feldnamen wurden an die Standard-Darstellung in Chirpstack für Dragino-Sensoren angeglichen.
-//
-// Payload-Struktur (11 Bytes, Big-Endian, FPort=2):
-// [0-1]: Batteriespannung (unsigned int16, in Millivolt)
-// [2-3]: Temperatur Sonde 1 (DS18B20_1, signed int16, Wert * 10)
-// [4-5]: Ignoriert
-// [6]:   Alarm-Flag
-// [7-8]: Temperatur Sonde 2 (DS18B20_2, signed int16, Wert * 10)
-// [9-10]: Platzhalter für Sonde 3 (0x7FFF)
-// --------------------------------------------------------------------
-
+// Chirpstack v4 Codec
 function decodeUplink(input) {
-  // Überprüfen, ob die erwartete Anzahl von Bytes empfangen wurde.
-  if (input.bytes.length !== 11) {
+  var data = {};
+  var warnings = [];
+  var errors = [];
+  var bytes = input.bytes;
+  var fPort = input.fPort;
+
+  // Mindestlänge prüfen: 2 (batt) + 1 (pct) + 1 (count) + 1 (alarm) = 5 Bytes
+  // Dies ist der Fall, wenn 0 Sensoren angeschlossen sind.
+  if (bytes.length < 5) {
+    errors.push("Payload length is too short.");
     return {
-      errors: ["Erwartet wurden 11 Bytes, empfangen wurden " + input.bytes.length]
+      data: data,
+      warnings: warnings,
+      errors: errors
     };
   }
 
-  // Überprüfen, ob der FPort korrekt ist.
-  if (input.fPort !== 2) {
-      return {
-          warnings: ["Uplink auf falschem FPort empfangen, erwartet 2, war " + input.fPort]
-      };
+  // DataView verwenden für einfacheres Handling von Multi-Byte-Werten (Big-Endian ist Standard)
+  var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  var idx = 0;
+
+  // Batteriespannung in mV (uint16)
+  var battmV = view.getUint16(idx);
+  data.battery_mv = battmV;
+  data.battery_v = battmV / 1000.0;
+  idx += 2;
+
+  // Batterie in Prozent (uint8)
+  data.battery_pct = view.getUint8(idx);
+  idx += 1;
+
+  // Anzahl der Sensoren (uint8)
+  var sensorCount = view.getUint8(idx);
+  data.sensor_count = sensorCount;
+  idx += 1;
+
+  // Prüfen, ob die Payload-Länge mit der erwarteten Länge basierend auf der Sensoranzahl übereinstimmt
+  var expectedLength = 5 + (sensorCount * 2);
+  if (bytes.length !== expectedLength) {
+      errors.push("Payload length " + bytes.length + " does not match expected length " + expectedLength + " for " + sensorCount + " sensors.");
+      // Trotzdem versuchen zu dekodieren, was möglich ist, aber den Fehler zurückgeben
   }
 
-  // Erstellen eines ArrayBuffer und DataView aus dem Byte-Array.
-  // DataView ist der robusteste Weg, Multi-Byte-Werte zu lesen.
-  // Der Standard ist Big-Endian, was dem Dragino-Format entspricht.
-  var buffer = new ArrayBuffer(input.bytes.length);
-  var view = new DataView(buffer);
-  input.bytes.forEach(function (b, i) {
-    view.setUint8(i, b);
-  });
+  // Temperaturen auslesen (int16 * 10 für jeden Sensor)
+  for (var i = 0; i < sensorCount; i++) {
+    // Sicherstellen, dass wir nicht über das Ende des Puffers hinaus lesen
+    if (idx + 2 > bytes.length) {
+        errors.push("Not enough bytes for sensor " + i);
+        break;
+    }
+    var temp_scaled = view.getInt16(idx);
+    // Einen dynamischen Schlüssel für jeden Temperatursensor verwenden
+    data['temperature_' + i] = temp_scaled / 10.0;
+    idx += 2;
+  }
 
-  var decoded = {};
-
-  // Bytes 0-1: Batteriespannung (BatV, unsigned int16)
-  // Der Wert wird in mV gesendet, wir konvertieren ihn in V.
-  decoded.BatV = view.getUint16(0) / 1000.0;
-
-  // Bytes 2-3: Temperatur Sonde 1 (DS18B20_1, signed int16)
-  // Der Wert wird als Grad * 10 gesendet, wir teilen, um den echten Wert zu erhalten.
-  decoded.DS18B20_1 = view.getInt16(2) / 10.0;
-
-  // Bytes 7-8: Temperatur Sonde 2 (DS18B20_2, signed int16)
-  decoded.DS18B20_2 = view.getInt16(7) / 10.0;
-
-  // Byte 6: Alarm-Flag (Ext_Trigger)
-  // Wir extrahieren das unterste Bit, um den Alarmstatus zu bestimmen.
-  var alarm_byte = view.getUint8(6);
-  decoded.Ext_Trigger = (alarm_byte & 0x01) ? true : false;
+  // Alarm-Maske auslesen (uint8)
+  // Sicherstellen, dass wir nicht über das Ende des Puffers hinaus lesen
+  if (idx < bytes.length) {
+    data.alarm_mask = view.getUint8(idx);
+    idx += 1;
+  }
 
   return {
-    data: decoded
+    data: data,
+    warnings: warnings,
+    errors: errors
   };
+}
+
+// Chirpstack v3 Codec (zur Kompatibilität)
+function Decode(fPort, bytes) {
+    var input = {
+        "fPort": fPort,
+        "bytes": bytes
+    };
+    return decodeUplink(input).data;
 }
