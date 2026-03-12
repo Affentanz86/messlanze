@@ -1,31 +1,31 @@
 # Heltec V3 LoRaWAN DS18B20 Node
 
-This project is an Arduino sketch for the Heltec WiFi LoRa 32 V3 board that reads temperature data from DS18B20 sensors and transmits it via LoRaWAN.
+Dieses Projekt ist ein Arduino-Sketch für das Heltec WiFi LoRa 32 V3 Board, das Temperaturdaten von DS18B20-Sensoren liest und über LoRaWAN überträgt.
 
-## Hardware Troubleshooting: DS18B20 on Battery Power
+## Hardware-Fehlersuche: DS18B20 im Batteriebetrieb
 
-If your sensors work when connected to USB but stop working when running on battery, check the following:
+Falls Ihre Sensoren funktionieren, wenn das Board über USB angeschlossen ist, aber im Batteriebetrieb ausfallen, prüfen Sie bitte folgende Punkte:
 
-### 1. Power Source for Sensors
-* **The Problem:** Many users connect the VCC of their sensors to the **5V or Vext pin**. On many Heltec boards, the 5V pin is ONLY powered when USB is connected. When running on battery, this pin might be dead.
-* **The Solution:** Connect the VCC of your DS18B20 sensors to the **3.3V pin** of the Heltec V3. The 3.3V rail remains active on battery power.
+### 1. Stromquelle für Sensoren
+* **Das Problem:** Viele Benutzer verbinden den VCC-Pin ihrer Sensoren mit dem **5V- oder Vext-Pin**. Bei vielen Heltec-Boards wird der 5V-Pin NUR mit Strom versorgt, wenn USB angeschlossen ist. Im Batteriebetrieb ist dieser Pin oft spannungslos.
+* **Die Lösung:** Verbinden Sie den VCC-Pin Ihrer DS18B20-Sensoren mit dem **3.3V-Pin** des Heltec V3. Die 3.3V-Schiene bleibt auch im Batteriebetrieb aktiv.
 
-### 2. Pull-up Resistor
-* OneWire sensors require a pull-up resistor (typically 4.7kΩ) between the DATA pin and VCC (3.3V).
-* If the external pull-up is missing or too weak, the internal pull-up of the ESP32 might not be enough.
-* **Update in Code:** We have enabled `INPUT_PULLUP` on the sensor pin in the code to provide additional stability, but a physical resistor is still highly recommended.
+### 2. Pull-up-Widerstand
+* OneWire-Sensoren benötigen einen Pull-up-Widerstand (typischerweise 4,7 kΩ) zwischen dem DATA-Pin und VCC (3,3 V).
+* Falls der externe Widerstand fehlt oder zu schwach ist, reicht der interne Pull-up des ESP32 eventuell nicht aus.
+* **Update im Code:** Wir haben `INPUT_PULLUP` für den Sensor-Pin im Code aktiviert, um zusätzliche Stabilität zu bieten. Ein physischer Widerstand wird dennoch dringend empfohlen.
 
-### 3. Vext Control
-* The Heltec V3 uses a MOSFET to control power to certain peripherals (like the OLED display and sometimes external sensors if connected to Vext).
-* The code ensures `VEXT_PIN` (GPIO 36) is set to `LOW` to enable power.
-* **Update in Code:** We increased the stabilization delay after enabling Vext to 1000ms to ensure the voltage is stable before the sensors are initialized.
+### 3. Vext-Steuerung
+* Das Heltec V3 verwendet einen MOSFET, um die Stromversorgung bestimmter Peripheriegeräte (wie das OLED-Display und manchmal externe Sensoren, falls an Vext angeschlossen) zu steuern.
+* Der Code stellt sicher, dass `VEXT_PIN` (GPIO 36) auf `LOW` gesetzt wird, um die Stromversorgung zu aktivieren.
+* **Update im Code:** Wir haben die Stabilisierungszeit nach dem Aktivieren von Vext auf 1000 ms erhöht, um sicherzustellen, dass die Spannung stabil ist, bevor die Sensoren initialisiert werden.
 
-### 4. Sensor Initialization Retry
-* Sometimes sensors take a moment to "wake up" when power is first applied.
-* **Update in Code:** The sketch now includes a retry loop that attempts to initialize the sensors up to 3 times if none are detected initially.
+### 4. Wiederholungsversuch bei der Sensor-Initialisierung
+* Manchmal benötigen Sensoren einen Moment, um "aufzuwachen", wenn die Spannung zum ersten Mal angelegt wird.
+* **Update im Code:** Der Sketch enthält nun eine Wiederholungsschleife, die bis zu 3 Versuche unternimmt, die Sensoren zu initialisieren, falls anfangs keine erkannt werden.
 
-## Compilation
-To compile this project using `arduino-cli`:
+## Kompilierung
+Um dieses Projekt mit `arduino-cli` zu kompilieren:
 ```bash
 arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 Heltec-V3-LoRaWAN
 ```
