@@ -210,24 +210,43 @@ void tryJoin() {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(VEXT_PIN, OUTPUT); digitalWrite(VEXT_PIN, LOW);
-  pinMode(VBAT_READ_CTL, OUTPUT); digitalWrite(VBAT_READ_CTL, HIGH);
-  delay(1000); // Erhöhte Stabilisierungszeit für Vext
-  u8g2.begin();
-  loadConfiguration();
-  pinMode(SENSOR_PIN, INPUT_PULLUP);
+  Serial.println("System Start...");
 
-  // Retry-Loop für Sensorerkennung
+  // Power Management
+  pinMode(VEXT_PIN, OUTPUT);
+  digitalWrite(VEXT_PIN, LOW);  // Vext ein (OLED & Sensoren)
+
+  // Heltec V3: VBAT_READ_CTL muss LOW sein, um die Batterie zu messen
+  pinMode(VBAT_READ_CTL, OUTPUT);
+  digitalWrite(VBAT_READ_CTL, LOW);
+
+  Serial.println("Warte auf Spannungsstabilisierung (2s)...");
+  delay(2000);
+
+  // OneWire Bus Reset
+  Serial.println("OneWire Bus Reset...");
+  pinMode(SENSOR_PIN, OUTPUT);
+  digitalWrite(SENSOR_PIN, LOW);
+  delay(100);
+  pinMode(SENSOR_PIN, INPUT_PULLUP);
+  delay(100);
+
+  // Sensor Initialisierung
   int retry = 0;
   while(retry < 3) {
     sensors.begin();
-    if(sensors.getDeviceCount() > 0) {
-      sensors.requestTemperatures(); // Dummy request to verify bus communication
+    int count = sensors.getDeviceCount();
+    Serial.printf("Versuch %d: %d Sensoren gefunden.\n", retry + 1, count);
+    if(count > 0) {
+      sensors.requestTemperatures();
       break;
     }
-    delay(500);
+    delay(1000);
     retry++;
   }
+
+  u8g2.begin();
+  loadConfiguration();
   if (radio.begin() == RADIOLIB_ERR_NONE) {
     node.beginOTAA(joinEui, devEui, NULL, appKey);
     tryJoin();
