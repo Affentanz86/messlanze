@@ -1,5 +1,5 @@
 /* * ====================================================================
- * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x FIXED + PYTHON COMPATIBLE)
+ * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x FIXED + NONCES)
  * ====================================================================
  */
 
@@ -23,7 +23,9 @@
 // --- RTC Speicher ---
 RTC_DATA_ATTR uint32_t bootCount = 0;
 RTC_DATA_ATTR uint8_t sessionBuffer[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
+RTC_DATA_ATTR uint8_t noncesBuffer[RADIOLIB_LORAWAN_NONCES_BUF_SIZE];
 RTC_DATA_ATTR bool sessionValid = false;
+RTC_DATA_ATTR bool noncesValid = false;
 
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, OLED_SCL, OLED_SDA, OLED_RST);
 OneWire oneWire(SENSOR_PIN);
@@ -126,6 +128,17 @@ void sendCurrentConfig() {
   Serial.println(deviceName);
 }
 
+void saveSessionToRTC() {
+  uint8_t* nodeBuffer = node.getBufferSession();
+  memcpy(sessionBuffer, nodeBuffer, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+  sessionValid = true;
+
+  uint8_t* noncesBuf = node.getBufferNonces();
+  memcpy(noncesBuffer, noncesBuf, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+  noncesValid = true;
+  Serial.println("Session & Nonces gesichert.");
+}
+
 void scanAndSaveSensors() {
   pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
@@ -207,11 +220,7 @@ void handleSerialConfig() {
     }
 
     if (input.startsWith("SAVE|")) {
-      // Format: SAVE|deveui|appeui|appkey|interval|name|horizontal|duration
-      // The Python script sends: cmd = f"SAVE|{eui1}|{eui2}|{key}|{intv}|{name}|{hori}|{dur}\n"
-      // There are 7 fields after "SAVE|".
-
-      int parts[7]; // We need to find 7 delimiters
+      int parts[7];
       int count = 0;
       int startSearch = 0;
       while (count < 7) {
@@ -222,7 +231,6 @@ void handleSerialConfig() {
       }
 
       if (count == 7) {
-        // parts[0] is index of '|' after SAVE
         String sDevEui = input.substring(parts[0]+1, parts[1]);
         String sAppEui = input.substring(parts[1]+1, parts[2]);
         String sAppKey = input.substring(parts[2]+1, parts[3]);
@@ -248,33 +256,10 @@ void handleSerialConfig() {
         Serial.println("SAVE_OK");
         loadConfiguration();
         sessionValid = false;
+        noncesValid = false;
       }
       return;
     }
-
-    // Fallback for legacy commands
-    prefs.begin("loraconfig", false);
-    if (input.startsWith("DEVEUI:")) {
-      uint64_t tempEui = hexToUint64(input.substring(7));
-      prefs.putBytes("deveui", &tempEui, 8); Serial.println("OK: DevEUI");
-      sessionValid = false;
-    }
-    else if (input.startsWith("APPEUI:")) {
-      uint64_t tempEui = hexToUint64(input.substring(7));
-      prefs.putBytes("appeui", &tempEui, 8); Serial.println("OK: AppEUI");
-    }
-    else if (input.startsWith("APPKEY:")) {
-      uint8_t tempKey[16]; hexToBytes(input.substring(7), tempKey, 16);
-      prefs.putBytes("appkey", tempKey, 16); Serial.println("OK: AppKey");
-      sessionValid = false;
-    }
-    else if (input.startsWith("NAME:")) {
-      prefs.putString("name", input.substring(5)); Serial.println("OK: Name");
-    }
-    else if (input.startsWith("TXINT:")) {
-      prefs.putInt("txInt", input.substring(6).toInt()); Serial.println("OK: Intervall");
-    }
-    prefs.end();
   }
 }
 
@@ -297,10 +282,7 @@ void sendLora(float vbat) {
   int state = node.sendReceive(payload, 10 + nLen);
 
   if (state >= RADIOLIB_ERR_NONE) {
-    uint8_t* nodeBuffer = node.getBufferSession();
-    memcpy(sessionBuffer, nodeBuffer, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
-    sessionValid = true;
-    Serial.println("Session gesichert.");
+    saveSessionToRTC();
   } else {
     Serial.printf("Send failed: %d\n", state);
   }
@@ -311,7 +293,7 @@ void setup() {
   pinMode(PRG_BUTTON, INPUT_PULLUP);
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
-  delay(2000); // Vext stabilization for DS18B20 on battery
+  delay(2000);
 
   loadConfiguration();
 
@@ -332,8 +314,13 @@ void setup() {
 
   int state = radio.begin();
   if (state == RADIOLIB_ERR_NONE) {
-    // Always call beginOTAA first
     node.beginOTAA(joinEui, devEui, NULL, appKey);
+
+    if (noncesValid) {
+        node.setBufferNonces(noncesBuffer);
+        Serial.println("Nonces wiederhergestellt.");
+    }
+
     if (sessionValid) {
       state = node.setBufferSession(sessionBuffer);
       if (state >= RADIOLIB_ERR_NONE) {
@@ -341,9 +328,11 @@ void setup() {
       } else {
         Serial.printf("Session restore failed: %d, joining...\n", state);
         state = node.activateOTAA();
+        if (state >= RADIOLIB_ERR_NONE) saveSessionToRTC();
       }
     } else {
       state = node.activateOTAA();
+      if (state >= RADIOLIB_ERR_NONE) saveSessionToRTC();
     }
   }
 
@@ -355,7 +344,6 @@ void setup() {
     showDisplay(v);
   }
 
-  // Dummy request to verify sensor bus
   pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
   sensors.requestTemperatures();
