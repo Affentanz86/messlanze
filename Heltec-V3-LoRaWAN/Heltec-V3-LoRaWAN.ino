@@ -1,5 +1,5 @@
 /* * ====================================================================
- * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x FIXED)
+ * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x FIXED + PYTHON COMPATIBLE)
  * ====================================================================
  */
 
@@ -65,6 +65,22 @@ uint64_t hexToUint64(String hex) {
   return res;
 }
 
+String uint64ToHex(uint64_t val) {
+  char buf[17];
+  sprintf(buf, "%08X%08X", (uint32_t)(val >> 32), (uint32_t)val);
+  return String(buf);
+}
+
+String bytesToHex(uint8_t* bytes, int len) {
+  String res = "";
+  for (int i = 0; i < len; i++) {
+    if (bytes[i] < 16) res += "0";
+    res += String(bytes[i], HEX);
+  }
+  res.toUpperCase();
+  return res;
+}
+
 String addrToString(DeviceAddress deviceAddress) {
   String res = "";
   for (uint8_t i = 0; i < 8; i++) {
@@ -101,21 +117,39 @@ void loadConfiguration() {
   prefs.end();
 }
 
+void sendCurrentConfig() {
+  Serial.print("LORA_DATA|");
+  Serial.print(uint64ToHex(devEui)); Serial.print("|");
+  Serial.print(uint64ToHex(joinEui)); Serial.print("|");
+  Serial.print(bytesToHex(appKey, 16)); Serial.print("|");
+  Serial.print(tx_interval_minutes); Serial.print("|");
+  Serial.println(deviceName);
+}
+
 void scanAndSaveSensors() {
   pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
   int found = sensors.getDeviceCount();
   if (found > 4) found = 4;
+
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.drawStr(0, 10, "SENSOR SCAN:");
+
   prefs.begin("loraconfig", false);
   prefs.putInt("sCount", found);
   for (int i = 0; i < found; i++) {
     if (sensors.getAddress(sensorOrder[i], i)) {
       prefs.putBytes(("s" + String(i)).c_str(), sensorOrder[i], 8);
       u8g2.setCursor(0, 25 + (i * 10));
-      u8g2.printf("S%d: %s", i+1, addrToString(sensorOrder[i]).substring(8).c_str());
+      String addr = addrToString(sensorOrder[i]);
+      u8g2.printf("S%d: %s", i+1, addr.substring(8).c_str());
+
+      // Python Manager output
+      sensors.requestTemperatures();
+      float t = sensors.getTempC(sensorOrder[i]);
+      Serial.print("ROM:"); Serial.print(addr);
+      Serial.print("|TEMP:"); Serial.println(t, 1);
     }
   }
   prefs.end();
@@ -166,6 +200,59 @@ void handleSerialConfig() {
     String input = Serial.readStringUntil('\n');
     input.trim();
     if (input.length() == 0) return;
+
+    if (input == "SCAN") {
+      scanAndSaveSensors();
+      return;
+    }
+
+    if (input.startsWith("SAVE|")) {
+      // Format: SAVE|deveui|appeui|appkey|interval|name|horizontal|duration
+      // The Python script sends: cmd = f"SAVE|{eui1}|{eui2}|{key}|{intv}|{name}|{hori}|{dur}\n"
+      // There are 7 fields after "SAVE|".
+
+      int parts[7]; // We need to find 7 delimiters
+      int count = 0;
+      int startSearch = 0;
+      while (count < 7) {
+        int idx = input.indexOf('|', startSearch);
+        if (idx == -1) break;
+        parts[count++] = idx;
+        startSearch = idx + 1;
+      }
+
+      if (count == 7) {
+        // parts[0] is index of '|' after SAVE
+        String sDevEui = input.substring(parts[0]+1, parts[1]);
+        String sAppEui = input.substring(parts[1]+1, parts[2]);
+        String sAppKey = input.substring(parts[2]+1, parts[3]);
+        String sInterval = input.substring(parts[3]+1, parts[4]);
+        String sName = input.substring(parts[4]+1, parts[5]);
+        String sHori = input.substring(parts[5]+1, parts[6]);
+        String sDur = input.substring(parts[6]+1);
+
+        prefs.begin("loraconfig", false);
+        uint64_t tDev = hexToUint64(sDevEui);
+        uint64_t tApp = hexToUint64(sAppEui);
+        uint8_t tKey[16]; hexToBytes(sAppKey, tKey, 16);
+
+        prefs.putBytes("deveui", &tDev, 8);
+        prefs.putBytes("appeui", &tApp, 8);
+        prefs.putBytes("appkey", tKey, 16);
+        prefs.putInt("txInt", sInterval.toInt());
+        prefs.putString("name", sName);
+        prefs.putBool("dispHori", sHori == "1");
+        prefs.putInt("dispDur", sDur.toInt());
+        prefs.end();
+
+        Serial.println("SAVE_OK");
+        loadConfiguration();
+        sessionValid = false;
+      }
+      return;
+    }
+
+    // Fallback for legacy commands
     prefs.begin("loraconfig", false);
     if (input.startsWith("DEVEUI:")) {
       uint64_t tempEui = hexToUint64(input.substring(7));
@@ -226,6 +313,8 @@ void setup() {
   digitalWrite(VEXT_PIN, LOW);
   delay(2000); // Vext stabilization for DS18B20 on battery
 
+  loadConfiguration();
+
   if (digitalRead(PRG_BUTTON) == LOW) {
     bool modeActive = true;
     for (int i = 0; i < 100; i++) {
@@ -233,13 +322,12 @@ void setup() {
       if (digitalRead(PRG_BUTTON) == HIGH) { modeActive = false; break; }
     }
     if (modeActive) {
-      scanAndSaveSensors();
+      sendCurrentConfig();
       showDisplay(0, "MODUS: SETUP");
       while (true) { handleSerialConfig(); delay(10); }
     }
   }
 
-  loadConfiguration();
   float v = getBatteryVoltage();
 
   int state = radio.begin();
