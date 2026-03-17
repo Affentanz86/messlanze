@@ -1,5 +1,5 @@
 /* * ====================================================================
- * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x FIXED + NONCES)
+ * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS)
  * ====================================================================
  */
 
@@ -22,15 +22,12 @@
 
 // --- RTC Speicher ---
 RTC_DATA_ATTR uint32_t bootCount = 0;
-RTC_DATA_ATTR uint8_t sessionBuffer[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
-RTC_DATA_ATTR uint8_t noncesBuffer[RADIOLIB_LORAWAN_NONCES_BUF_SIZE];
-RTC_DATA_ATTR bool sessionValid = false;
-RTC_DATA_ATTR bool noncesValid = false;
 
 U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, OLED_SCL, OLED_SDA, OLED_RST);
 OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
 Preferences prefs;
+Preferences loraPrefs;
 
 SX1262 radio = new Module(8, 14, 12, 13);
 LoRaWANNode node(&radio, &EU868);
@@ -128,15 +125,55 @@ void sendCurrentConfig() {
   Serial.println(deviceName);
 }
 
-void saveSessionToRTC() {
-  uint8_t* nodeBuffer = node.getBufferSession();
-  memcpy(sessionBuffer, nodeBuffer, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
-  sessionValid = true;
+void saveLoRaWANToNVS() {
+  loraPrefs.begin("loranvs", false);
+
+  uint8_t* sessionBuf = node.getBufferSession();
+  loraPrefs.putBytes("session", sessionBuf, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
 
   uint8_t* noncesBuf = node.getBufferNonces();
-  memcpy(noncesBuffer, noncesBuf, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
-  noncesValid = true;
-  Serial.println("Session & Nonces gesichert.");
+  loraPrefs.putBytes("nonces", noncesBuf, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+
+  loraPrefs.putBool("valid", true);
+  loraPrefs.end();
+
+  uint32_t fcntUp = node.getFCntUp();
+  Serial.printf("NVS SAVE: FCntUp=%u\n", fcntUp);
+}
+
+void restoreLoRaWANFromNVS() {
+  loraPrefs.begin("loranvs", true);
+  if (loraPrefs.getBool("valid", false)) {
+    uint8_t sessionBuf[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
+    uint8_t noncesBuf[RADIOLIB_LORAWAN_NONCES_BUF_SIZE];
+
+    loraPrefs.getBytes("nonces", noncesBuf, RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+    int16_t state = node.setBufferNonces(noncesBuf);
+    if (state == RADIOLIB_ERR_NONE) {
+      Serial.println("Nonces aus NVS geladen.");
+
+      loraPrefs.getBytes("session", sessionBuf, RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+      state = node.setBufferSession(sessionBuf);
+      if (state == RADIOLIB_ERR_NONE) {
+        uint32_t fcntUp = node.getFCntUp();
+        Serial.printf("Session aus NVS geladen (FCntUp=%u).\n", fcntUp);
+      } else {
+        Serial.printf("Session restore failed: %d\n", state);
+      }
+    } else {
+      Serial.printf("Nonces restore failed: %d\n", state);
+    }
+  } else {
+    Serial.println("Keine valide LoRaWAN Session im NVS gefunden.");
+  }
+  loraPrefs.end();
+}
+
+void clearLoRaWANFromNVS() {
+  loraPrefs.begin("loranvs", false);
+  loraPrefs.putBool("valid", false);
+  loraPrefs.end();
+  Serial.println("NVS Session ungültig gesetzt.");
 }
 
 void scanAndSaveSensors() {
@@ -255,8 +292,7 @@ void handleSerialConfig() {
 
         Serial.println("SAVE_OK");
         loadConfiguration();
-        sessionValid = false;
-        noncesValid = false;
+        clearLoRaWANFromNVS();
       }
       return;
     }
@@ -282,14 +318,20 @@ void sendLora(float vbat) {
   int state = node.sendReceive(payload, 10 + nLen);
 
   if (state >= RADIOLIB_ERR_NONE) {
-    saveSessionToRTC();
+    saveLoRaWANToNVS();
   } else {
     Serial.printf("Send failed: %d\n", state);
+    // Even if send fails, we should save nonces because DevNonce might have incremented
+    saveLoRaWANToNVS();
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("\n--- Heltec V3 Boot ---");
+  Serial.printf("Boot Count: %d\n", bootCount);
+  Serial.printf("Wakeup Cause: %d\n", esp_sleep_get_wakeup_cause());
+
   pinMode(PRG_BUTTON, INPUT_PULLUP);
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
@@ -316,27 +358,25 @@ void setup() {
   if (state == RADIOLIB_ERR_NONE) {
     node.beginOTAA(joinEui, devEui, NULL, appKey);
 
-    if (noncesValid) {
-        node.setBufferNonces(noncesBuffer);
-        Serial.println("Nonces wiederhergestellt.");
-    }
+    restoreLoRaWANFromNVS();
 
-    if (sessionValid) {
-      state = node.setBufferSession(sessionBuffer);
+    if (!node.isActivated()) {
+      Serial.println("Starte OTAA Join...");
+      state = node.activateOTAA();
       if (state >= RADIOLIB_ERR_NONE) {
-        Serial.println("Session wiederhergestellt!");
+        Serial.println("Join erfolgreich!");
+        saveLoRaWANToNVS();
       } else {
-        Serial.printf("Session restore failed: %d, joining...\n", state);
-        state = node.activateOTAA();
-        if (state >= RADIOLIB_ERR_NONE) saveSessionToRTC();
+        Serial.printf("Join fehlgeschlagen: %d\n", state);
+        // Save nonces even on failure to preserve DevNonce
+        saveLoRaWANToNVS();
       }
     } else {
-      state = node.activateOTAA();
-      if (state >= RADIOLIB_ERR_NONE) saveSessionToRTC();
+      Serial.println("Session erfolgreich wiederhergestellt.");
     }
   }
 
-  if (state < RADIOLIB_ERR_NONE) {
+  if (state < RADIOLIB_ERR_NONE && !node.isActivated()) {
     Serial.printf("LoRaWAN init failed: %d\n", state);
   }
 
