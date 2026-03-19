@@ -1,5 +1,5 @@
 /* * ====================================================================
- * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS + BATTERY FIXED)
+ * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS + SENSOR FIX)
  * ====================================================================
  */
 
@@ -18,7 +18,7 @@
 #define OLED_RST 21
 #define SENSOR_PIN 4
 #define PRG_BUTTON 0
-#define VBAT_FACTOR 5.31  // Factory default for Heltec V3 divider
+#define VBAT_FACTOR 5.31
 
 // --- RTC Speicher ---
 RTC_DATA_ATTR uint32_t bootCount = 0;
@@ -94,15 +94,9 @@ String addrToString(DeviceAddress deviceAddress) {
 }
 
 float getBatteryVoltage() {
-  pinMode(VBAT_READ_CTL, OUTPUT);
-  digitalWrite(VBAT_READ_CTL, HIGH); // HIGH to enable divider on Heltec V3
-  delay(100);
-
   uint32_t raw = 0;
   for (int i = 0; i < 100; i++) { raw += analogRead(VBAT_ADC_PIN); delay(1); }
   float v = (raw / 100.0 / 4095.0) * 3.3 * VBAT_FACTOR;
-
-  // digitalWrite(VBAT_READ_CTL, LOW); // Disable to save power (optional)
   return v;
 }
 
@@ -189,7 +183,6 @@ void clearLoRaWANFromNVS() {
 }
 
 void scanAndSaveSensors() {
-  pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
   int found = sensors.getDeviceCount();
   if (found > 4) found = 4;
@@ -237,13 +230,14 @@ void showDisplay(float vbat, const char* overrideMsg = nullptr) {
   u8g2.drawStr(0, 10, deviceName.c_str());
   u8g2.drawHLine(0, 12, 128);
 
-  pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
   sensors.requestTemperatures();
 
   u8g2.setFont(u8g2_font_7x14_tf);
   for (int i = 0; i < savedSensorCount; i++) {
     float t = sensors.getTempC(sensorOrder[i]);
+    if (t < -50.0) t = sensors.getTempCByIndex(i); // Fallback to Index
+
     String txt = "S" + String(i + 1) + ":" + (t > -50 ? String(t, 1) + "C" : "ERR");
     int x = (display_horizontal) ? (i % 2) * 64 : 5;
     int y = (display_horizontal) ? (i / 2) * 20 + 28 : (i * 15) + 28;
@@ -312,15 +306,17 @@ void handleSerialConfig() {
 }
 
 void sendLora(float vbat) {
-  pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
   sensors.requestTemperatures();
+  delay(100);
 
   uint16_t battmV = (uint16_t)(vbat * 1000);
   uint8_t battPct = batteryPercent(vbat);
-  uint8_t count = (uint8_t)savedSensorCount;
-  uint8_t alarmMask = 0;
 
+  int found = sensors.getDeviceCount();
+  uint8_t count = (uint8_t)constrain(max(found, savedSensorCount), 0, 4);
+
+  uint8_t alarmMask = 0;
   uint8_t payload[40];
   int idx = 0;
 
@@ -332,6 +328,8 @@ void sendLora(float vbat) {
 
   for (int i = 0; i < count; i++) {
     float t = sensors.getTempC(sensorOrder[i]);
+    if (t < -50.0) t = sensors.getTempCByIndex(i); // Fallback to Index
+
     int16_t ti = (t > -50.0) ? (int16_t)(t * 10) : 0x7FFF;
     payload[idx++] = (ti >> 8) & 0xFF;
     payload[idx++] = ti & 0xFF;
@@ -362,13 +360,15 @@ void setup() {
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
 
-  // Batterie-Messschaltung aktivieren (User working example: Pin 37 HIGH)
+  // Batterie-Messschaltung aktivieren
   pinMode(VBAT_READ_CTL, OUTPUT);
   digitalWrite(VBAT_READ_CTL, HIGH);
 
   delay(2000);
 
   loadConfiguration();
+  pinMode(SENSOR_PIN, INPUT_PULLUP);
+  sensors.begin();
 
   if (digitalRead(PRG_BUTTON) == LOW) {
     bool modeActive = true;
@@ -415,8 +415,6 @@ void setup() {
     showDisplay(v);
   }
 
-  pinMode(SENSOR_PIN, INPUT_PULLUP);
-  sensors.begin();
   sensors.requestTemperatures();
   delay(800);
 
