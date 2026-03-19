@@ -1,5 +1,5 @@
 /* * ====================================================================
- * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS)
+ * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS + BATTERY)
  * ====================================================================
  */
 
@@ -18,7 +18,7 @@
 #define OLED_RST 21
 #define SENSOR_PIN 4
 #define PRG_BUTTON 0
-#define VBAT_FACTOR 5.31
+#define VBAT_FACTOR 5.10  // Empirical factor for Heltec V3 divider
 
 // --- RTC Speicher ---
 RTC_DATA_ATTR uint32_t bootCount = 0;
@@ -41,6 +41,10 @@ int savedSensorCount = 0;
 int tx_interval_minutes = 10;
 int display_duration = 8;
 bool display_horizontal = true;
+
+// Alarm thresholds
+#define TEMP_MIN -20.0
+#define TEMP_MAX  60.0
 
 // --- Hilfsfunktionen ---
 void hexToBytes(String hex, uint8_t* bytes, int len) {
@@ -91,13 +95,23 @@ String addrToString(DeviceAddress deviceAddress) {
 
 float getBatteryVoltage() {
   pinMode(VBAT_READ_CTL, OUTPUT);
-  digitalWrite(VBAT_READ_CTL, LOW); // Heltec V3: LOW to enable divider
-  delay(50);
-  long sum = 0;
-  for (int i = 0; i < 100; i++) { sum += analogRead(VBAT_ADC_PIN); delay(1); }
-  float vbat = ((float)sum / 100 / 4095.0) * 3.3 * VBAT_FACTOR;
+  digitalWrite(VBAT_READ_CTL, LOW); // LOW to enable divider on Heltec V3
+  delay(100);
+
+  // Use analogReadMilliVolts for better accuracy if available
+  // otherwise manual calc
+  uint32_t raw = 0;
+  for (int i = 0; i < 50; i++) { raw += analogRead(VBAT_ADC_PIN); delay(1); }
+  float v = (raw / 50.0 / 4095.0) * 3.3 * VBAT_FACTOR;
+
   digitalWrite(VBAT_READ_CTL, HIGH); // Disable to save power
-  return vbat;
+  return v;
+}
+
+uint8_t batteryPercent(float v) {
+    if (v >= 4.2) return 100;
+    if (v <= 3.3) return 0;
+    return (uint8_t)((v - 3.3) / (4.2 - 3.3) * 100);
 }
 
 void loadConfiguration() {
@@ -220,7 +234,7 @@ void showDisplay(float vbat, const char* overrideMsg = nullptr) {
     u8g2.sendBuffer();
     return;
   }
-  int percent = constrain((int)((vbat - 3.3) / (4.10 - 3.3) * 100.0), 0, 100);
+  int percent = batteryPercent(vbat);
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.drawStr(0, 10, deviceName.c_str());
   u8g2.drawHLine(0, 12, 128);
@@ -303,25 +317,39 @@ void sendLora(float vbat) {
   pinMode(SENSOR_PIN, INPUT_PULLUP);
   sensors.begin();
   sensors.requestTemperatures();
-  uint8_t payload[40];
-  uint16_t v = (uint16_t)(vbat * 100);
-  payload[0] = v >> 8; payload[1] = v & 0xFF;
-  for (int i = 0; i < 4; i++) {
-    float t = (i < savedSensorCount) ? sensors.getTempC(sensorOrder[i]) : -127.0;
-    int16_t ti = (t > -50.0) ? (int16_t)(t * 10) : 0x7FFF;
-    payload[2+(i*2)] = ti >> 8; payload[3+(i*2)] = ti & 0xFF;
-  }
-  int nLen = deviceName.length();
-  if (nLen > 15) nLen = 15;
-  for (int i = 0; i < nLen; i++) payload[10+i] = (uint8_t)deviceName[i];
 
-  int state = node.sendReceive(payload, 10 + nLen);
+  uint16_t battmV = (uint16_t)(vbat * 1000);
+  uint8_t battPct = batteryPercent(vbat);
+  uint8_t count = (uint8_t)savedSensorCount;
+  uint8_t alarmMask = 0;
+
+  uint8_t payload[40];
+  int idx = 0;
+
+  // Format matching decoder.js: mV(2) + %(1) + count(1) + T(2*count) + alarm(1)
+  payload[idx++] = (battmV >> 8) & 0xFF;
+  payload[idx++] = battmV & 0xFF;
+  payload[idx++] = battPct;
+  payload[idx++] = count;
+
+  for (int i = 0; i < count; i++) {
+    float t = sensors.getTempC(sensorOrder[i]);
+    int16_t ti = (t > -50.0) ? (int16_t)(t * 10) : 0x7FFF;
+    payload[idx++] = (ti >> 8) & 0xFF;
+    payload[idx++] = ti & 0xFF;
+
+    if (t < TEMP_MIN || t > TEMP_MAX) {
+      alarmMask |= (1 << i);
+    }
+  }
+  payload[idx++] = alarmMask;
+
+  int state = node.sendReceive(payload, idx);
 
   if (state >= RADIOLIB_ERR_NONE) {
     saveLoRaWANToNVS();
   } else {
     Serial.printf("Send failed: %d\n", state);
-    // Even if send fails, we should save nonces because DevNonce might have incremented
     saveLoRaWANToNVS();
   }
 }
@@ -347,12 +375,13 @@ void setup() {
     }
     if (modeActive) {
       sendCurrentConfig();
-      showDisplay(0, "MODUS: SETUP");
+      showDisplay(getBatteryVoltage(), "MODUS: SETUP");
       while (true) { handleSerialConfig(); delay(10); }
     }
   }
 
   float v = getBatteryVoltage();
+  Serial.printf("Battery: %.2fV\n", v);
 
   int state = radio.begin();
   if (state == RADIOLIB_ERR_NONE) {
@@ -368,7 +397,6 @@ void setup() {
         saveLoRaWANToNVS();
       } else {
         Serial.printf("Join fehlgeschlagen: %d\n", state);
-        // Save nonces even on failure to preserve DevNonce
         saveLoRaWANToNVS();
       }
     } else {
