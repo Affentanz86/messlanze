@@ -128,7 +128,9 @@ void sendCurrentConfig() {
   Serial.print(uint64ToHex(joinEui)); Serial.print("|");
   Serial.print(bytesToHex(appKey, 16)); Serial.print("|");
   Serial.print(tx_interval_minutes); Serial.print("|");
-  Serial.println(deviceName);
+  Serial.print(deviceName); Serial.print("|");
+  Serial.print(display_horizontal ? "1" : "0"); Serial.print("|");
+  Serial.println(display_duration);
 }
 
 void saveLoRaWANToNVS() {
@@ -263,24 +265,26 @@ void handleSerialConfig() {
     }
 
     if (input.startsWith("SAVE|")) {
-      int parts[7];
+      // Format: SAVE|DevEUI|AppEUI|AppKey|Interval|Name|Hori|Dur|ROM1,ROM2...
+      int parts[8];
       int count = 0;
       int startSearch = 0;
-      while (count < 7) {
+      while (count < 8) {
         int idx = input.indexOf('|', startSearch);
         if (idx == -1) break;
         parts[count++] = idx;
         startSearch = idx + 1;
       }
 
-      if (count == 7) {
+      if (count == 8) {
         String sDevEui = input.substring(parts[0]+1, parts[1]);
         String sAppEui = input.substring(parts[1]+1, parts[2]);
         String sAppKey = input.substring(parts[2]+1, parts[3]);
         String sInterval = input.substring(parts[3]+1, parts[4]);
         String sName = input.substring(parts[4]+1, parts[5]);
         String sHori = input.substring(parts[5]+1, parts[6]);
-        String sDur = input.substring(parts[6]+1);
+        String sDur = input.substring(parts[6]+1, parts[7]);
+        String sRoms = input.substring(parts[7] + 1);
 
         prefs.begin("loraconfig", false);
         uint64_t tDev = hexToUint64(sDevEui);
@@ -294,11 +298,29 @@ void handleSerialConfig() {
         prefs.putString("name", sName);
         prefs.putBool("dispHori", sHori == "1");
         prefs.putInt("dispDur", sDur.toInt());
+
+        // Parse ROMs
+        int rCount = 0;
+        int rStart = 0;
+        while (rCount < 4) {
+          int nextComma = sRoms.indexOf(',', rStart);
+          String romHex = (nextComma == -1) ? sRoms.substring(rStart) : sRoms.substring(rStart, nextComma);
+          romHex.trim();
+          if (romHex.length() == 16) {
+            DeviceAddress addr;
+            hexToBytes(romHex, addr, 8);
+            prefs.putBytes(("s" + String(rCount)).c_str(), addr, 8);
+            rCount++;
+          }
+          if (nextComma == -1) break;
+          rStart = nextComma + 1;
+        }
+        prefs.putInt("sCount", rCount);
         prefs.end();
 
-        Serial.println("SAVE_OK");
-        loadConfiguration();
-        clearLoRaWANFromNVS();
+        Serial.println("OK: GESPEICHERT. RESTART...");
+        delay(1000);
+        ESP.restart();
       }
       return;
     }
