@@ -7,8 +7,8 @@ import time
 class HeltecManager(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Heltec V3 LoRa Manager v1.4")
-        self.geometry("900x950")
+        self.title("Heltec V3 LoRa Manager v1.5")
+        self.geometry("900x980")
         self.ser = None
         self.sensors = []
 
@@ -28,8 +28,12 @@ class HeltecManager(ctk.CTk):
         header_f.pack(fill="x", padx=20, pady=10)
 
         ctk.CTkLabel(header_f, text="Heltec V3 LoRaWAN Manager", font=("Arial", 22, "bold")).pack(side="left")
+
+        # Hilfe Button im Header
+        ctk.CTkButton(header_f, text="? HILFE", width=80, fg_color="gray30", command=lambda: self.tabview.set("Anleitung & Hilfe")).pack(side="right", padx=10)
+
         self.bat_label = ctk.CTkLabel(header_f, text="Bat: -- V", font=("Arial", 14, "bold"), text_color="gray")
-        self.bat_label.pack(side="right", padx=20)
+        self.bat_label.pack(side="right", padx=10)
 
         # Port Auswahl
         port_f = ctk.CTkFrame(self.tab_config)
@@ -53,7 +57,7 @@ class HeltecManager(ctk.CTk):
         self.hori_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(self.tab_config, text="Layout Horizontal (2x2)", variable=self.hori_var).pack(pady=5)
 
-        self.scroll = ctk.CTkScrollableFrame(self.tab_config, height=200, label_text="DS18B20 Sensoren")
+        self.scroll = ctk.CTkScrollableFrame(self.tab_config, height=220, label_text="DS18B20 Sensoren (Position festlegen)")
         self.scroll.pack(fill="both", padx=20, pady=10)
 
         btn_f = ctk.CTkFrame(self.tab_config, fg_color="transparent")
@@ -91,17 +95,18 @@ Schritt 2: Verbindung
 Schritt 3: Sensoren scannen
 - Klicken Sie auf '1. SENSOR SCAN'. Das Board sucht alle angeschlossenen DS18B20.
 - Die gefundenen IDs (ROMs) erscheinen in der Liste.
-- Sie können die Reihenfolge (1-4) ändern, in der sie im LoRa-Paket gesendet werden.
+- WICHTIG: Geben Sie in das kleine Feld rechts die POSITION (1, 2, 3 oder 4) ein.
+- S1, S2, S3, S4 entspricht der Reihenfolge im LoRa-Paket und auf dem Display.
 
 Schritt 4: Speichern
 - Geben Sie Ihre LoRaWAN Keys (DevEUI, AppEUI, AppKey) ein.
 - Klicken Sie auf '2. SPEICHERN & RESTART'.
 - Das Board speichert die Daten im NVS (Flash) und startet im Normalmodus neu.
 
-=== HINWEISE ===
+=== FEHLERBEHEBUNG ===
+- Wenn Speichern nicht geht: Prüfen Sie, ob DevEUI/AppEUI 16 Zeichen und AppKey 32 Zeichen lang sind (nur 0-9, A-F).
 - 'NVS Session ungültig gesetzt' ist normal beim Speichern. Es stellt sicher, dass das Board
   nach dem Neustart einen frischen OTAA Join durchführt.
-- Das Board sendet im Normalmodus alle X Minuten (Intervall) die Daten an das Gateway.
 """
         self.guide_box = ctk.CTkTextbox(self.tab_guide, font=("Arial", 14), wrap="word")
         self.guide_box.pack(fill="both", expand=True, padx=20, pady=20)
@@ -161,17 +166,22 @@ Schritt 4: Speichern
                     self.add_sensor_row(parts[0].split(":")[1], parts[1].split(":")[1])
 
                 elif "OK:" in line: self.log(f"ERFOLG: {line}")
+                elif "ERR:" in line: self.log(f"FEHLER: {line}")
                 else: self.log(f"Board: {line}")
             except: break
 
     def add_sensor_row(self, rom, temp):
         f = ctk.CTkFrame(self.scroll)
         f.pack(fill="x", pady=2, padx=5)
-        ctk.CTkLabel(f, text=f"ID: {rom}", width=220, anchor="w").pack(side="left", padx=10)
-        ctk.CTkLabel(f, text=f"{temp}°C", width=80).pack(side="left", padx=10)
+        pos = len(self.sensors) + 1
+        ctk.CTkLabel(f, text=f"S{pos}", width=30, text_color="orange", font=("Arial", 12, "bold")).pack(side="left", padx=5)
+        ctk.CTkLabel(f, text=f"ID: {rom}", width=200, anchor="w").pack(side="left", padx=5)
+        ctk.CTkLabel(f, text=f"{temp}°C", width=60).pack(side="left", padx=5)
+
+        ctk.CTkLabel(f, text="Pos:", width=30).pack(side="left", padx=2)
         e = ctk.CTkEntry(f, width=40)
-        e.insert(0, str(len(self.sensors) + 1))
-        e.pack(side="left", padx=10)
+        e.insert(0, str(pos))
+        e.pack(side="left", padx=5)
         self.sensors.append({"rom": rom, "entry": e})
 
     def start_scan(self):
@@ -181,13 +191,26 @@ Schritt 4: Speichern
         self.log("Starte Sensor-Scan...")
 
     def save_all(self):
-        if not self.ser: return
+        if not self.ser:
+            self.log("Fehler: Nicht verbunden!")
+            return
+
+        # Validation
+        dev = self.deveui.get().strip()
+        app = self.appeui.get().strip()
+        key = self.appkey.get().strip()
+
+        if len(dev) != 16 or len(app) != 16 or len(key) != 32:
+            self.log("FEHLER: Keys haben falsche Länge!")
+            return
+
         self.sensors.sort(key=lambda x: int(x["entry"].get()) if x["entry"].get().isdigit() else 99)
         rom_list = ",".join([s["rom"] for s in self.sensors[:4]])
         # New Format: SAVE|DevEUI|AppEUI|AppKey|Interval|Name|Hori|Dur|ROM1,ROM2...
-        cmd = f"SAVE|{self.deveui.get()}|{self.appeui.get()}|{self.appkey.get()}|{self.interval.get()}|{self.devname.get()}|{'1' if self.hori_var.get() else '0'}|{self.disp_dur.get()}|{rom_list}\n"
+        cmd = f"SAVE|{dev}|{app}|{key}|{self.interval.get()}|{self.devname.get()}|{'1' if self.hori_var.get() else '0'}|{self.disp_dur.get()}|{rom_list}\n"
+
+        self.log(f"Sende: SAVE|{dev[:4]}...|{rom_list[:20]}...")
         self.ser.write(cmd.encode())
-        self.log("Sende Konfiguration...")
 
 if __name__ == "__main__":
     app = HeltecManager()

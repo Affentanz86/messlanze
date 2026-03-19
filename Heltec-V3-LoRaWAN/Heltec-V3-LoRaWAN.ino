@@ -321,6 +321,8 @@ void handleSerialConfig() {
         Serial.println("OK: GESPEICHERT. RESTART...");
         delay(1000);
         ESP.restart();
+      } else {
+        Serial.printf("ERR: SAVE FORMAT (Gefunden: %d/8 Felder)\n", count);
       }
       return;
     }
