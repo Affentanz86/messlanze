@@ -1,5 +1,5 @@
 /* * ====================================================================
- * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS + BATTERY)
+ * HELTEC V3 LORA & TEMPERATURE MONITOR (RADIOLIB 7.x ROBUST NVS + BATTERY FIXED)
  * ====================================================================
  */
 
@@ -18,7 +18,7 @@
 #define OLED_RST 21
 #define SENSOR_PIN 4
 #define PRG_BUTTON 0
-#define VBAT_FACTOR 5.10  // Empirical factor for Heltec V3 divider
+#define VBAT_FACTOR 5.31  // Factory default for Heltec V3 divider
 
 // --- RTC Speicher ---
 RTC_DATA_ATTR uint32_t bootCount = 0;
@@ -95,16 +95,14 @@ String addrToString(DeviceAddress deviceAddress) {
 
 float getBatteryVoltage() {
   pinMode(VBAT_READ_CTL, OUTPUT);
-  digitalWrite(VBAT_READ_CTL, LOW); // LOW to enable divider on Heltec V3
+  digitalWrite(VBAT_READ_CTL, HIGH); // HIGH to enable divider on Heltec V3
   delay(100);
 
-  // Use analogReadMilliVolts for better accuracy if available
-  // otherwise manual calc
   uint32_t raw = 0;
-  for (int i = 0; i < 50; i++) { raw += analogRead(VBAT_ADC_PIN); delay(1); }
-  float v = (raw / 50.0 / 4095.0) * 3.3 * VBAT_FACTOR;
+  for (int i = 0; i < 100; i++) { raw += analogRead(VBAT_ADC_PIN); delay(1); }
+  float v = (raw / 100.0 / 4095.0) * 3.3 * VBAT_FACTOR;
 
-  digitalWrite(VBAT_READ_CTL, HIGH); // Disable to save power
+  // digitalWrite(VBAT_READ_CTL, LOW); // Disable to save power (optional)
   return v;
 }
 
@@ -363,6 +361,11 @@ void setup() {
   pinMode(PRG_BUTTON, INPUT_PULLUP);
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
+
+  // Batterie-Messschaltung aktivieren (User working example: Pin 37 HIGH)
+  pinMode(VBAT_READ_CTL, OUTPUT);
+  digitalWrite(VBAT_READ_CTL, HIGH);
+
   delay(2000);
 
   loadConfiguration();
