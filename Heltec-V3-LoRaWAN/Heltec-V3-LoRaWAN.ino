@@ -8,6 +8,20 @@
 #include <DallasTemperature.h>
 #include <Preferences.h>
 #include <U8g2lib.h>
+#include <WiFi.h>
+
+// Set DEBUG to 1 to enable Serial output, 0 for maximum battery life
+#define DEBUG 0
+
+#if DEBUG
+  #define DBG_PRINT(...) Serial.print(__VA__ARGS__)
+  #define DBG_PRINTLN(...) Serial.println(__VA__ARGS__)
+  #define DBG_PRINTF(...) Serial.printf(__VA__ARGS__)
+#else
+  #define DB_PRINT(...)
+  #define DBG_PRINTLN(...)
+  #define DBG_PRINTF(...)
+#endif
 
 // --- Hardware Pins Heltec V3 ---
 #define VEXT_PIN 36
@@ -95,8 +109,12 @@ String addrToString(DeviceAddress deviceAddress) {
 
 float getBatteryVoltage() {
   uint32_t raw = 0;
-  for (int i = 0; i < 100; i++) { raw += analogRead(VBAT_ADC_PIN); delay(1); }
-  float v = (raw / 100.0 / 4095.0) * 3.3 * VBAT_FACTOR;
+  pinMode(VBAT_READ_CTL, OUTPUT);
+  digitalWrite(VBAT_READ_CTL, HIGH);
+  delay(10); // Short stabilization
+  for (int i = 0; i < 20; i++) { raw += analogRead(VBAT_ADC_PIN); delayMicroseconds(100); }
+  float v = (raw / 20.0 / 4095.0) * 3.3 * VBAT_FACTOR;
+  // Pin will be set to INPUT in deep sleep preparation
   return v;
 }
 
@@ -146,7 +164,9 @@ void saveLoRaWANToNVS() {
   loraPrefs.end();
 
   uint32_t fcntUp = node.getFCntUp();
-  Serial.printf("NVS SAVE: FCntUp=%u\n", fcntUp);
+  #if DEBUG
+    Serial.printf("NVS SAVE: FCntUp=%u\n", fcntUp);
+  #endif
 }
 
 void restoreLoRaWANFromNVS() {
@@ -370,70 +390,69 @@ void sendLora(float vbat) {
   if (state >= RADIOLIB_ERR_NONE) {
     saveLoRaWANToNVS();
   } else {
-    Serial.printf("Send failed: %d\n", state);
+    #if DEBUG
+      Serial.printf("Send failed: %d\n", state);
+    #endif
     saveLoRaWANToNVS();
   }
 }
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("\n--- Heltec V3 Boot ---");
-  Serial.printf("Boot Count: %d\n", bootCount);
-  Serial.printf("Wakeup Cause: %d\n", esp_sleep_get_wakeup_cause());
+  // Maximum battery life: Lower CPU frequency, disable unused radios
+  setCpuFrequencyMhz(80);
+  WiFi.mode(WIFI_OFF);
+  btStop();
 
   pinMode(PRG_BUTTON, INPUT_PULLUP);
-  pinMode(VEXT_PIN, OUTPUT);
-  digitalWrite(VEXT_PIN, LOW);
 
-  // Batterie-Messschaltung aktivieren
-  pinMode(VBAT_READ_CTL, OUTPUT);
-  digitalWrite(VBAT_READ_CTL, HIGH);
-
-  delay(2000);
-
-  loadConfiguration();
-  pinMode(SENSOR_PIN, INPUT_PULLUP);
-  sensors.begin();
-
+  // SETUP MODE check (requires Serial)
   if (digitalRead(PRG_BUTTON) == LOW) {
     bool modeActive = true;
-    for (int i = 0; i < 100; i++) {
-      delay(100);
+    for (int i = 0; i < 50; i++) {
+      delay(20);
       if (digitalRead(PRG_BUTTON) == HIGH) { modeActive = false; break; }
     }
     if (modeActive) {
+      Serial.begin(115200);
+      pinMode(VEXT_PIN, OUTPUT);
+      digitalWrite(VEXT_PIN, LOW);
+      delay(500);
+      loadConfiguration();
+      sensors.begin();
       sendCurrentConfig();
       showDisplay(getBatteryVoltage(), "MODUS: SETUP");
       while (true) { handleSerialConfig(); delay(10); }
     }
   }
 
+  #if DEBUG
+    Serial.begin(115200);
+    Serial.printf("\n--- Heltec V3 Boot (Count: %d) ---\n", bootCount);
+  #endif
+
+  pinMode(VEXT_PIN, OUTPUT);
+  digitalWrite(VEXT_PIN, LOW);
+
+  // Short wait for power stabilization
+  delay(500);
+
+  loadConfiguration();
+  sensors.begin();
+
   float v = getBatteryVoltage();
-  Serial.printf("Battery: %.2fV\n", v);
 
   int state = radio.begin();
   if (state == RADIOLIB_ERR_NONE) {
     node.beginOTAA(joinEui, devEui, NULL, appKey);
-
     restoreLoRaWANFromNVS();
 
     if (!node.isActivated()) {
-      Serial.println("Starte OTAA Join...");
+      #if DEBUG
+        Serial.println("Starte OTAA Join...");
+      #endif
       state = node.activateOTAA();
-      if (state >= RADIOLIB_ERR_NONE) {
-        Serial.println("Join erfolgreich!");
-        saveLoRaWANToNVS();
-      } else {
-        Serial.printf("Join fehlgeschlagen: %d\n", state);
-        saveLoRaWANToNVS();
-      }
-    } else {
-      Serial.println("Session erfolgreich wiederhergestellt.");
+      saveLoRaWANToNVS();
     }
-  }
-
-  if (state < RADIOLIB_ERR_NONE && !node.isActivated()) {
-    Serial.printf("LoRaWAN init failed: %d\n", state);
   }
 
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 || bootCount == 0) {
@@ -441,13 +460,22 @@ void setup() {
   }
 
   sensors.requestTemperatures();
-  delay(800);
+  delay(800); // Required for DS18B20 12-bit conversion
 
   sendLora(v);
   bootCount++;
 
+  // Preparation for Deep Sleep
   radio.sleep();
-  digitalWrite(VEXT_PIN, HIGH);
+  digitalWrite(VEXT_PIN, HIGH); // Power off sensors and display
+
+  // Set all used pins to safe state to prevent leakage
+  pinMode(VEXT_PIN, INPUT);
+  pinMode(VBAT_READ_CTL, INPUT);
+  pinMode(SENSOR_PIN, INPUT);
+  pinMode(OLED_RST, INPUT);
+  // SDA/SCL will be floating after u8g2.setPowerSave(1)
+
   esp_sleep_enable_timer_wakeup((uint64_t)tx_interval_minutes * 60 * 1000000);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)PRG_BUTTON, 0);
   esp_deep_sleep_start();
