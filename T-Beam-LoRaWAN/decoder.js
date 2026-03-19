@@ -1,80 +1,59 @@
-// Chirpstack v4 Codec
+// Chirpstack v4 Codec for Heltec V3 & T-Beam Fixed Payload
 function decodeUplink(input) {
   var data = {};
   var warnings = [];
-  var errors = [];
   var bytes = input.bytes;
-  var fPort = input.fPort;
 
-  // Mindestlänge prüfen: 2 (batt) + 1 (pct) + 1 (count) + 1 (alarm) = 5 Bytes
-  // Dies ist der Fall, wenn 0 Sensoren angeschlossen sind.
-  if (bytes.length < 5) {
-    errors.push("Payload length is too short.");
+  // Fixed length payload: 13 Bytes
+  // Byte 0-1: Battery Voltage (mV)
+  // Byte 2-9: 4x Temperatures (int16 * 10)
+  // Byte 10: Battery Percentage (%)
+  // Byte 11: Sensor Count
+  // Byte 12: Alarm Mask
+  if (bytes.length < 13) {
     return {
       data: data,
-      warnings: warnings,
-      errors: errors
+      errors: ["Payload too short: expected 13 bytes, got " + bytes.length]
     };
   }
 
-  // DataView verwenden für einfacheres Handling von Multi-Byte-Werten (Big-Endian ist Standard)
   var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  var idx = 0;
 
-  // Batteriespannung in mV (uint16)
-  var battmV = view.getUint16(idx);
-  data.battery_mv = battmV;
+  // 1. Battery Voltage
+  var battmV = view.getUint16(0);
   data.battery_v = battmV / 1000.0;
-  idx += 2;
+  data.battery_mv = battmV;
 
-  // Batterie in Prozent (uint8)
-  data.battery_pct = view.getUint8(idx);
-  idx += 1;
+  // 2. Temperatures (Fixed slots 1-4)
+  for (var i = 0; i < 4; i++) {
+    var rawTemp = view.getInt16(2 + (i * 2));
+    var key = "temp_s" + (i + 1);
 
-  // Anzahl der Sensoren (uint8)
-  var sensorCount = view.getUint8(idx);
-  data.sensor_count = sensorCount;
-  idx += 1;
-
-  // Prüfen, ob die Payload-Länge mit der erwarteten Länge basierend auf der Sensoranzahl übereinstimmt
-  var expectedLength = 5 + (sensorCount * 2);
-  if (bytes.length !== expectedLength) {
-      errors.push("Payload length " + bytes.length + " does not match expected length " + expectedLength + " for " + sensorCount + " sensors.");
-      // Trotzdem versuchen zu dekodieren, was möglich ist, aber den Fehler zurückgeben
-  }
-
-  // Temperaturen auslesen (int16 * 10 für jeden Sensor)
-  for (var i = 0; i < sensorCount; i++) {
-    // Sicherstellen, dass wir nicht über das Ende des Puffers hinaus lesen
-    if (idx + 2 > bytes.length) {
-        errors.push("Not enough bytes for sensor " + i);
-        break;
+    // 0x7FFF is used as "no data" marker
+    if (rawTemp === 0x7FFF) {
+      data[key] = null;
+    } else {
+      data[key] = rawTemp / 10.0;
     }
-    var temp_scaled = view.getInt16(idx);
-    // Einen dynamischen Schlüssel für jeden Temperatursensor verwenden
-    data['temperature_' + i] = temp_scaled / 10.0;
-    idx += 2;
   }
 
-  // Alarm-Maske auslesen (uint8)
-  // Sicherstellen, dass wir nicht über das Ende des Puffers hinaus lesen
-  if (idx < bytes.length) {
-    data.alarm_mask = view.getUint8(idx);
-    idx += 1;
-  }
+  // 3. Metadata
+  data.battery_pct = view.getUint8(10);
+  data.sensor_count = view.getUint8(11);
+  data.alarm_mask = view.getUint8(12);
 
   return {
     data: data,
-    warnings: warnings,
-    errors: errors
+    warnings: warnings
   };
 }
 
-// Chirpstack v3 Codec (zur Kompatibilität)
+// Chirpstack v3 Codec (Legacy)
 function Decode(fPort, bytes) {
     var input = {
         "fPort": fPort,
         "bytes": bytes
     };
-    return decodeUplink(input).data;
+    var res = decodeUplink(input);
+    return res.data;
 }

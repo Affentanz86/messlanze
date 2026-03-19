@@ -306,41 +306,42 @@ void handleSerialConfig() {
 }
 
 void sendLora(float vbat) {
-  sensors.begin();
-  sensors.requestTemperatures();
-  delay(100);
-
+  // Temperatures were already requested in setup() with sufficient delay
   uint16_t battmV = (uint16_t)(vbat * 1000);
   uint8_t battPct = batteryPercent(vbat);
-
-  int found = sensors.getDeviceCount();
-  uint8_t count = (uint8_t)constrain(max(found, savedSensorCount), 0, 4);
+  uint8_t found = (uint8_t)sensors.getDeviceCount();
 
   uint8_t alarmMask = 0;
-  uint8_t payload[40];
-  int idx = 0;
+  uint8_t payload[13]; // Fixed size: 2 (batt) + 8 (4*temp) + 1 (%) + 1 (count) + 1 (alarm)
 
-  // Format matching decoder.js: mV(2) + %(1) + count(1) + T(2*count) + alarm(1)
-  payload[idx++] = (battmV >> 8) & 0xFF;
-  payload[idx++] = battmV & 0xFF;
-  payload[idx++] = battPct;
-  payload[idx++] = count;
+  // Byte 0-1: Battery Voltage (mV)
+  payload[0] = (battmV >> 8) & 0xFF;
+  payload[1] = battmV & 0xFF;
 
-  for (int i = 0; i < count; i++) {
-    float t = sensors.getTempC(sensorOrder[i]);
-    if (t < -50.0) t = sensors.getTempCByIndex(i); // Fallback to Index
+  // Byte 2-9: 4x Temperature Slots (int16, value * 10)
+  for (int i = 0; i < 4; i++) {
+    float t = -127.0;
+    if (i < savedSensorCount) {
+      t = sensors.getTempC(sensorOrder[i]);
+      // Fallback if specific sensor address not found but sensors are present
+      if (t < -126.0 && i < found) t = sensors.getTempCByIndex(i);
+    }
 
-    int16_t ti = (t > -50.0) ? (int16_t)(t * 10) : 0x7FFF;
-    payload[idx++] = (ti >> 8) & 0xFF;
-    payload[idx++] = ti & 0xFF;
+    int16_t ti = (t > -126.0) ? (int16_t)(t * 10) : 0x7FFF;
+    payload[2 + (i * 2)] = (ti >> 8) & 0xFF;
+    payload[3 + (i * 2)] = (ti & 0xFF);
 
-    if (t < TEMP_MIN || t > TEMP_MAX) {
+    if (t > -50.0 && (t < TEMP_MIN || t > TEMP_MAX)) {
       alarmMask |= (1 << i);
     }
   }
-  payload[idx++] = alarmMask;
 
-  int state = node.sendReceive(payload, idx);
+  // Byte 10-12: Metadata
+  payload[10] = battPct;
+  payload[11] = found;
+  payload[12] = alarmMask;
+
+  int state = node.sendReceive(payload, 13);
 
   if (state >= RADIOLIB_ERR_NONE) {
     saveLoRaWANToNVS();
